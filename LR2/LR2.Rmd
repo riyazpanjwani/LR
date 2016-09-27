@@ -1,0 +1,264 @@
+---
+title: "LR2 Problem"
+author: "Riyaz Panjwani"
+date: "September 26, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Problem Statement 
+
+##Phishing Site Detection Using ML Algorithm 
+
+In todays world where almost all user data is online, phishing has become a major menace. We
+want to classify websites as phishing websites based on some attributes.
+Numbers against the attributes show the possible categories for that attribute. The descriptions
+for the features have been given only to fulfill your curiosity.  
+
+< FeatureName ??? SetofPossibleValues > ???[Description(ifNecessary)]
+
+For more info regarding the features look at :  
+
+##Approach To the Problem 
+
+The problem seems to be quite trivial use of classification algorithm. We can use any of the popular classifiaction algorithm like Neural Netwoks, Decision Tress, Boosting , SVM and others.
+
+I have used Boosting because of increased accuracy however I have also used SVM  and decision tree.The later were discarded due to not lower efficientcy being 91.2% and 90.99% respectivley.
+
+##Getting the Data 
+
+In order to reproduce the same results, you need a certain set of packages, as well as setting a pseudo random seed equal to the one I used. *Note*:To install, for instance, the caret package in R, run this command: install.packages("caret")
+
+The following Libraries were used for this project, which you should install - if not done yet - and load on your working environment.
+
+```{r, echo=TRUE}
+library(ggplot2)
+library(lattice)
+library(caret)
+library(car)
+library(corrplot)
+library(Rtsne)
+library(xgboost)
+library(stats)
+library(knitr)
+```
+
+For fast and accurate training the model, I choose XGBoost, an implementation of tree-based extreme gradient boosting algorithm.
+
+```{r}
+train <- read.csv("C:\\Users\\Aryan\\AppData\\Local\\Temp\\RtmpCyK3CX\\data13a413a12886", header=FALSE)
+test <- read.csv("C:\\Users\\Aryan\\AppData\\Local\\Temp\\RtmpCyK3CX\\data13a413fb684a", header=FALSE)
+
+dim(train)
+dim(test)
+names(train)
+```
+
+The raw training data has 9055 rows of observations and 31 features (predictors).While the testing data has 2000 rows and 30 features. There is one column of target outcome named **V31**.
+
+##Data Cleaning 
+
+The data appears to be clean with no *NA* Values.The values are either 0,1,-1 and the output being -1 -- > False and 1 --> True 
+
+```{r}
+out <- train[,31]
+head(out)
+
+train$V31 <- factor(train$V31,
+                    levels = c(-1,1),
+                    labels = c("0", "1"))
+```
+
+The only major problem with the data is the output which is either -1 or 1. But XGBoost requies the output data to be [0,num_class)
+where num_class is the number of classification classes here being 2.
+
+```{r}
+train.org <- read.csv("C:\\Users\\Aryan\\AppData\\Local\\Temp\\RtmpCyK3CX\\data13a413a12886", header=FALSE)
+
+out <- train[,31] == 1
+levels(out)
+levels(out) <- 1 : length(levels(out))
+
+train$V31 = NULL
+
+cols.without.na <- colSums(is.na(test)) == 0
+train <- train[,cols.without.na]
+test <- test[,cols.without.na]
+```
+
+##Preprocessing 
+###Check for features's varaiance 
+
+Based on the principal component analysis PCA, it is important that features have maximum variance for maximum uniqueness, so that each feature is as distant as possible (as orthogonal as possible) from the other features.
+```{r}
+zero.var = nearZeroVar(train, saveMetrics=TRUE)
+zero.var
+```
+
+##Plot of correlation Matrix
+Plot a correlation matrix between features.
+A good set of features is when they are highly uncorrelated (orthogonal) each others. The plot below shows average of correlation is not too high, so I choose to not perform further PCA preprocessing.
+
+```{r}
+corrplot.mixed(cor(train), lower="circle", upper="color", 
+               tl.pos="lt", diag="n", order="hclust", hclust.method="complete")
+```
+
+##Build Machine Learning Model 
+
+Now build a machine learning model to predict activity quality (V31 outcome) from the activity monitors (the features or predictors) by using XGBoost extreme gradient boosting algorithm.
+
+###XGBOOST Data 
+
+XGBoost supports only numeric matrix data. Converting all training, testing and outcome data to matrix.
+
+```{r}
+
+# convert data to matrix
+train.matrix <- as.matrix(train)
+mode(train.matrix) <- "numeric"
+test.matrix <- as.matrix(test)
+mode(test.matrix) <- "numeric"
+# convert outcome from factor to numeric matrix 
+#   xgboost takes multi-labels in [0, numOfClass)
+y <- as.matrix(as.integer(out))
+```
+
+###XGBOOST Parameters
+
+Set XGBoost parameters for cross validation and training.
+Set a multiclass classification objective as the gradient boosting's learning function.
+Set evaluation metric to merror, multiclass error rate
+
+```{r}
+
+param <- list("objective" = "multi:softprob",    # multiclass classification 
+              "num_class" = length(levels(out)),    # number of classes 
+              "eval_metric" = "merror",    # evaluation metric 
+              "nthread" = 8,   # number of threads to be used 
+              "max_depth" = 16,    # maximum depth of tree 
+              "eta" = 0.3,    # step size shrinkage 
+              "gamma" = 0,    # minimum loss reduction 
+              "subsample" = 1,    # part of data instances to grow tree 
+              "colsample_bytree" = 1,  # subsample ratio of columns when constructing each tree 
+              "min_child_weight" = 12  # minimum sum of instance weight needed in a child 
+)
+```
+
+
+###4 Fold CV
+
+```{r}
+set.seed(1234)
+# k-fold cross validation, with timing
+nround.cv <- 50
+system.time( bst.cv <- xgb.cv(param=param, data=train.matrix, label=y, 
+                              nfold=4, nrounds=nround.cv, prediction=TRUE, verbose=FALSE) )
+```
+
+
+The time elapsed is around 12 sec !! :) 
+
+```{r}
+tail(bst.cv$dt) 
+```
+
+From the cross validation, choose index with minimum multiclass error rate.
+Index will be used in the model training to fulfill expected minimum error rate of < 1%.
+```{r}
+min.merror.idx <- which.min(bst.cv$dt[, test.merror.mean]) 
+min.merror.idx 
+```
+
+And the stats being 
+
+```{r}
+bst.cv$dt[min.merror.idx,]
+```
+
+###Moment Of Silence 
+Lets finally plot the **confusion matrix** and plot the relevant stats to make the final estimate about the model
+
+```{r}
+#predict 
+
+pred.cv <- matrix(bst.cv$pred, nrow=length(bst.cv$pred)/length(levels(out)), ncol=length(levels(out)))
+pred.cv <- max.col(pred.cv, "last")
+
+#Confusion Matrix
+confusionMatrix(factor(y+1), factor(pred.cv))
+```
+
+I can also compare the data 
+
+```{r}
+#this contains 1 and 2's where 1 -->FALSE and 2 --> TRUE
+#Since I want to compare the data on equal ground lets convert the data 
+train$V31 <- pred.cv
+train$V31[train$V31 == 1] <- -1
+train$V31[train$V31 == 2] <- 1
+
+#library(compare)
+#comparison <- compare(train$V31,train.org$V31,allowAll=TRUE)
+#comparison$tM
+```
+
+This can be further explored if we know the places number of mistmatch which is another way of computing the same thing done by confusion matrix 
+
+```{r}
+mis <- train$V31 == train.org$V31
+#Wrongly Predicted Value 
+sum(mis == FALSE)
+#Correctly Predicted Value 
+sum(mis == TRUE )
+```
+
+__**Clearly the accuracy being 96.2% :) **__
+
+##Predcit the Test Data 
+
+```{r}
+system.time( bst <- xgboost(param=param, data=train.matrix, label=y, 
+                           nrounds=min.merror.idx, verbose=0) )
+pred <- predict(bst, test.matrix) 
+head(pred,15)
+```
+
+###Post processing 
+
+Decode the output 
+```{r}
+pred <- matrix(pred, nrow=2, ncol=length(pred)/2)
+pred <- t(pred)
+pred <- max.col(pred, "last")
+pred.ans <- toupper(letters[pred])
+head(pred.ans,5)
+```
+
+Now this is converted to normal form as
+```{r}
+pred.ans[pred.ans == "A"] <- -1
+pred.ans[pred.ans == "B"] <-  1
+head(pred.ans,5)
+```
+
+###Feature Importance Plot
+```{r}
+# get the trained model
+model <- xgb.dump(bst, with.stats=TRUE)
+# get the feature real names
+names <- dimnames(train.matrix)[[2]]
+# compute feature importance matrix
+importance_matrix <- xgb.importance(names, model=bst)
+
+# plot
+gp <- xgb.plot.importance(importance_matrix)
+print(gp)
+```
+
+
+
+
